@@ -9,7 +9,7 @@ import image, os, tf, uos, gc
 class LaneFollower:
     def __init__(self):
         # Camera parameters setup
-        self.roi = (0, 30, 160, 70)  # Default ROI
+        self.roi = (0, 40, 160, 80)  # Default ROI
 
         # Desired lane center
         self.desired_lane_center = 80
@@ -27,7 +27,7 @@ class LaneFollower:
         self.servo_channel = self.timer4.channel(3, Timer.PWM, pin=pyb.Pin.board.P9)
 
         # Initial PWM duty cycle
-        self.duty_cycle = 17
+        self.duty_cycle = 20
 
         # Camera Setup
         sensor.reset()
@@ -179,7 +179,7 @@ class LaneFollower:
 
     def determine_distance(self):
         distance = self.measure_distance_cm()
-        if distance < 440:  # If the cone is closer than 30 cm, stop the car
+        if distance < 10:  # If the cone is closer than 30 cm, stop the car
              self.bypass_object()
 
         else:
@@ -187,24 +187,24 @@ class LaneFollower:
 
     def bypass_object(self):
         # Stop the car
-        self.control_dc_motor(0)
+        #self.control_dc_motor(0)
 
         ## Wait for the car to turn
         pyb.delay(1000)  # Adjust the delay as needed (1 second = 1000 milliseconds)
 
-        self.control_dc_motor(25)
-        self.control_servo_motor(self.SERVO_MAX)  # Adjust the value if needed
-        pyb.delay(500)
+        #self.control_dc_motor(25)
+        self.control_servo_motor(self.SERVO_MIN)  # Adjust the value if needed
+        pyb.delay(800)
         ## Move the servo motor back to the neutral position
         self.control_servo_motor(self.SERVO_NEUTRAL)
-        self.control_servo_motor(self.SERVO_MIN)
+        self.control_servo_motor(self.SERVO_MAX)
 
-        pyb.delay(500)  # Adjust the delay as needed (3 seconds = 3000 milliseconds)
+        pyb.delay(800)  # Adjust the delay as needed (3 seconds = 3000 milliseconds)
 
         #pyb.delay(3000)  # Adjust the delay as needed (3 seconds = 3000 milliseconds)
 
         # Resume lane following
-        self.control_dc_motor(self.duty_cycle)
+        #self.control_dc_motor(self.duty_cycle)
 
     def traffic_detect(self, img):
         img_traffic = img.copy()
@@ -216,14 +216,12 @@ class LaneFollower:
         if self.circles and self.red_blobs:
             filtered_red_blobs = self.filter_red_blobs(self.red_blobs)
             if filtered_red_blobs:
-                self.control_dc_motor(self.duty_cycle)
                 print("Green traffic")
 
                 # Process the filtered red blobs
         elif self.circles and self.green_blobs:
             filtered_green_blobs = self.filter_green_blobs(self.green_blobs)
             if filtered_green_blobs:
-                self.control_dc_motor(0)
                 print("Red traffic")
                 # Process the filtered green blobs
         else:
@@ -237,6 +235,7 @@ class LaneFollower:
     def filter_green_blobs(self, green_blobs):
         filtered_blobs = [blob for blob in green_blobs if blob.area() > 100]
         return filtered_blobs
+        
 
 
     def run(self):
@@ -246,9 +245,9 @@ class LaneFollower:
             
             
             #car functions
-            #self.determine_distance()
+            self.determine_distance()
             #self.identify_objects(img)
-            #self.traffic_detect(img)
+            self.traffic_detect()
 
 
 
