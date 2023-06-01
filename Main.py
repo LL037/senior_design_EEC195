@@ -42,8 +42,8 @@ class LaneFollower:
         self.servo_channel.pulse_width(0)
 
         # PID parameters (now PD parameters)
-        self.kp = 100
-        self.kd = 0.15
+        self.kp = 35
+        self.kd = 0.3
         self.prev_error = 0
 
 
@@ -65,14 +65,20 @@ class LaneFollower:
         self.prev_servo_command = self.SERVO_NEUTRAL
 
         # Damping factor
-        self.DAMPING_FACTOR = 0.75
+        self.DAMPING_FACTOR = 0.5
 
         # Define the size of the moving average filter
-        self.MAF_SIZE = 12
+        self.MAF_SIZE = 8
 
         # Initialize the moving average filter list with the desired_lane_center
         self.maf_list = [self.desired_lane_center for _ in range(self.MAF_SIZE)]
 
+                # Define the size of the moving average filter for deflection angle
+        self.MAF_SIZE_ANGLE = 4
+
+        # Initialize the moving average filter list for deflection angle
+        self.maf_list_angle = [0 for _ in range(self.MAF_SIZE_ANGLE)]
+        
     def measure_distance_cm(self):
         trigger_pin = Pin('P7', Pin.OUT_PP)
         echo_pin = Pin('P8', Pin.IN)
@@ -117,35 +123,48 @@ class LaneFollower:
                 if avg_x < (max_right if max_right is not None else img.width()):
                     max_right = avg_x
                     max_right_line = l
+
+
         # If both lines are detected, calculate the center
         if max_left is not None and max_right is not None:
-            lane_center = (max_left + max_right) // 2
-            #print("Lane Center:", lane_center)
+            lane_center = (max_left + max_right)//2
+            print("Lane Center:", lane_center)
             self.last_center = lane_center  # Update the last center
         else:
             lane_center = self.last_center  # Use the last center
-        # Calculate deflection angle
-        if max_left_line and max_right_line:
-            left_angle = max_left_line.theta()
-            right_angle = max_right_line.theta()
-            deflection_angle = (left_angle - right_angle) / 2
-            #print("Deflection Angle:", deflection_angle)
-        else:
-            deflection_angle = 0
 
-        # Adjust speed according to deflection angle
-        if abs(deflection_angle) < 30:
-            duty_cycle = 15
-        else:
-            duty_cycle = 18
         # Add the current lane_center to the list and calculate the average
         self.maf_list.pop(0)  # Remove the oldest value
         self.maf_list.append(lane_center)  # Add the new value
         lane_center_avg = sum(self.maf_list) / self.MAF_SIZE  # Calculate the average
 
-        error = self.desired_lane_center - lane_center_avg
+        if 78 <= lane_center_avg <= 82:
+            error = 0
+        else:
+            error = self.desired_lane_center - lane_center_avg
 
-        return error, max_left_line, max_right_line
+        # Calculate deflection angle and add to MAF
+        if max_left_line and max_right_line:
+            left_angle = max_left_line.theta()
+            right_angle = max_right_line.theta()
+            deflection_angle = (left_angle - right_angle) / 2
+
+            # Add the current deflection angle to the list and calculate the average
+            self.maf_list_angle.pop(0)  # Remove the oldest value
+            self.maf_list_angle.append(deflection_angle)  # Add the new value
+            deflection_angle_avg = sum(self.maf_list_angle) / self.MAF_SIZE_ANGLE  # Calculate the average
+        else:
+            deflection_angle_avg = sum(self.maf_list_angle) / self.MAF_SIZE_ANGLE  # Use the average of the past values if current value is not available
+
+        # Adjust speed according to deflection angle
+        if abs(deflection_angle_avg) < 10:
+            duty_cycle = 16
+        elif 10 < abs(deflection_angle_avg) < 30:
+            duty_cycle = 18
+        else:
+            duty_cycle = 20
+        return error, max_left_line, max_right_line, duty_cycle
+
 
     def calculate_pid_output(self, error):
         proportional = self.kp * error
@@ -162,8 +181,7 @@ class LaneFollower:
         distance = self.measure_distance_cm()
         if distance < 440:  # If the cone is closer than 30 cm, stop the car
              self.bypass_object()
-             #self.control_dc_motor(0)
-             #print("stop")
+
         else:
             self.control_dc_motor(self.duty_cycle)
 
@@ -186,7 +204,6 @@ class LaneFollower:
         #pyb.delay(3000)  # Adjust the delay as needed (3 seconds = 3000 milliseconds)
 
         # Resume lane following
-        self.duty_cycle = 15
         self.control_dc_motor(self.duty_cycle)
 
     def traffic_detect(self, img):
@@ -199,7 +216,7 @@ class LaneFollower:
         if self.circles and self.red_blobs:
             filtered_red_blobs = self.filter_red_blobs(self.red_blobs)
             if filtered_red_blobs:
-                self.control_dc_motor(15)
+                self.control_dc_motor(self.duty_cycle)
                 print("Green traffic")
 
                 # Process the filtered red blobs
@@ -221,50 +238,22 @@ class LaneFollower:
         filtered_blobs = [blob for blob in green_blobs if blob.area() > 100]
         return filtered_blobs
 
-    def identify_objects(self,img):
-        clock = time.clock()
-        img_gray = img.copy() #img.to_grayscale()
-        net = None
-        labels = None
-
-        try:
-            # load the model, alloc the model file on the heap if we have at least 64K free after loading
-            net = tf.load("trained.tflite", load_to_fb=uos.stat('trained.tflite')[6] > (gc.mem_free() - (64 * 1024)))
-        except Exception as e:
-            print(e)
-            raise Exception('Failed to load "trained.tflite", did you copy the .tflite and labels.txt file onto the mass-storage device? (' + str(e) + ')')
-
-        try:
-            labels = [line.rstrip('\n') for line in open("labels.txt")]
-        except Exception as e:
-            raise Exception('Failed to load "labels.txt", did you copy the .tflite and labels.txt file onto the mass-storage device? (' + str(e) + ')')
-        while True:
-            clock.tick()
-
-            # default settings just do one detection... change them to search the image...
-            for obj in net.classify(img_gray, min_scale=1.0, scale_mul=0.8, x_overlap=0.5, y_overlap=0.5):
-                print("**********\nPredictions at [x=%d,y=%d,w=%d,h=%d]" % obj.rect())
-                img.draw_rectangle(obj.rect())
-                # This combines the labels and confidence values into a list of tuples
-                predictions_list = list(zip(labels, obj.output()))
-
-                for i in range(len(predictions_list)):
-                    print("%s = %f" % (predictions_list[i][0], predictions_list[i][1]))
-
-            print(clock.fps(), "fps")
-
 
     def run(self):
         while True:
             self.clock.tick()
             img = sensor.snapshot()  # Get a color image
-
+            
+            
+            #car functions
             #self.determine_distance()
-            self.identify_objects(img)
-            error, max_left_line, max_right_line = self.detect_lines(img)
-
-            # Detecting the traffic light
+            #self.identify_objects(img)
             #self.traffic_detect(img)
+
+
+
+            error, max_left_line, max_right_line, duty_cycle = self.detect_lines(img)
+
 
 
             # Calculate PD controller output
