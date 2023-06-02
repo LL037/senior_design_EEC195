@@ -79,6 +79,10 @@ class LaneFollower:
         # Initialize the moving average filter list for deflection angle
         self.maf_list_angle = [0 for _ in range(self.MAF_SIZE_ANGLE)]
         
+        #dc motor control flag
+        self.tlt = 0
+        self.ot = 0
+        
     def measure_distance_cm(self):
         trigger_pin = Pin('P7', Pin.OUT_PP)
         echo_pin = Pin('P8', Pin.IN)
@@ -105,6 +109,21 @@ class LaneFollower:
     def control_servo_motor(self, servo_command):
         self.servo_channel.pulse_width(servo_command)
 
+    def motor_control(self, duty_cycle, tlt, ot):
+        if self.ot:
+            # Stop the car
+            self.control_dc_motor(0)
+            pyb.delay(1000)  # Adjust the delay as needed (1 second = 1000 milliseconds)
+            self.control_dc_motor(25)
+            pyb.delay(800)
+            pyb.delay(800)  # Adjust the delay as needed (3 seconds = 3000 milliseconds)        
+            # Resume lane following
+            self.control_dc_motor(self.duty_cycle)
+        elif self.tlt:
+            self.control_dc_motor(0)
+        else:
+            self.control_dc_motor(self.duty_cycle)
+    
     def detect_lines(self, img):
         img_gray = img.copy()
         img_gray.to_grayscale()
@@ -158,12 +177,12 @@ class LaneFollower:
 
         # Adjust speed according to deflection angle
         if abs(deflection_angle_avg) < 10:
-            duty_cycle = 16
+            self.duty_cycle = 16
         elif 10 < abs(deflection_angle_avg) < 30:
-            duty_cycle = 18
+            self.duty_cycle = 18
         else:
-            duty_cycle = 20
-        return error, max_left_line, max_right_line, duty_cycle
+            self.duty_cycle = 20
+        return error, max_left_line, max_right_line, self.duty_cycle
 
 
     def calculate_pid_output(self, error):
@@ -180,11 +199,11 @@ class LaneFollower:
     def determine_distance(self):
         distance = self.measure_distance_cm()
         if distance < 10:  # If the cone is closer than 30 cm, stop the car
-             self.bypass_object()
+             self.ot = 1
 
         else:
-            self.control_dc_motor(self.duty_cycle)
-
+            self.ot = 0
+            
     def bypass_object(self):
         # Stop the car
         #self.control_dc_motor(0)
@@ -209,24 +228,26 @@ class LaneFollower:
     def traffic_detect(self, img):
         img_traffic = img.copy()
 
-        self.red_blobs = img_traffic.find_blobs([(0, 100, -128, -10, 0, 10)], area_threshold=100,merge=True)
-        self.green_blobs = img_traffic.find_blobs([(50, 100, -60, -10, -40, -10)], area_threshold=100,merge=True)
+        self.red_blobs = img_traffic.find_blobs([(30, 100, 50, 70, 50, 100)], area_threshold=100,merge=True)
+        self.green_blobs = img_traffic.find_blobs([(30, 100, -70, -10, -10, 10)], area_threshold=100,merge=True)
         self.circles = img_traffic.find_circles(threshold=500, x_margin=10, y_margin=10, r_margin=10, r_min=10, r_max=50, r_step=2)
 
         if self.circles and self.red_blobs:
             filtered_red_blobs = self.filter_red_blobs(self.red_blobs)
             if filtered_red_blobs:
-                print("Green traffic")
+                self.tlt = 1 
+                print("Red traffic")
 
                 # Process the filtered red blobs
         elif self.circles and self.green_blobs:
             filtered_green_blobs = self.filter_green_blobs(self.green_blobs)
             if filtered_green_blobs:
-                print("Red traffic")
+                self.tlt = 0
+                print("Green traffic")
                 # Process the filtered green blobs
         else:
             print("No traffic")
-            self.control_dc_motor(15)
+            self.tlt = 0
 
     def filter_red_blobs(self, red_blobs):
         filtered_blobs = [blob for blob in red_blobs if blob.area() > 100]
@@ -247,13 +268,11 @@ class LaneFollower:
             #car functions
             self.determine_distance()
             #self.identify_objects(img)
-            self.traffic_detect()
-
+            self.traffic_detect(img)
 
 
             error, max_left_line, max_right_line, duty_cycle = self.detect_lines(img)
-
-
+            self.motor_control(self.duty_cycle, self.tlt, self.ot)
 
             # Calculate PD controller output
             pd_output = self.calculate_pid_output(error)
