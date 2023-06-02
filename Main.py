@@ -68,7 +68,7 @@ class LaneFollower:
         self.DAMPING_FACTOR = 0.5
 
         # Define the size of the moving average filter
-        self.MAF_SIZE = 2
+        self.MAF_SIZE = 8
 
         # Initialize the moving average filter list with the desired_lane_center
         self.maf_list = [self.desired_lane_center for _ in range(self.MAF_SIZE)]
