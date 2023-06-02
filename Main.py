@@ -41,9 +41,9 @@ class LaneFollower:
         self.dc_motor_channel.pulse_width_percent(0)
         self.servo_channel.pulse_width(0)
 
-        # PID parameters (now PD parameters)
-        self.kp = 35
-        self.kd = 1.3
+        # PID parameters (now PD parameters)  33 1.15
+        self.kp = 31
+        self.kd = 1.15
         self.prev_error = 0
 
 
@@ -68,7 +68,7 @@ class LaneFollower:
         self.DAMPING_FACTOR = 0.5
 
         # Define the size of the moving average filter
-        self.MAF_SIZE = 8
+        self.MAF_SIZE = 2
 
         # Initialize the moving average filter list with the desired_lane_center
         self.maf_list = [self.desired_lane_center for _ in range(self.MAF_SIZE)]
@@ -130,7 +130,7 @@ class LaneFollower:
             self.control_dc_motor(0)
         else:
             self.control_dc_motor(duty_cycle)
-            print(duty_cycle)
+
 
 
     def detect_lines(self, img):
@@ -176,7 +176,7 @@ class LaneFollower:
             left_angle = max_left_line.theta()
             right_angle = max_right_line.theta()
             deflection_angle = (left_angle - right_angle) / 2
-
+            print("deflection angle: ",deflection_angle)
             # Add the current deflection angle to the list and calculate the average
             self.maf_list_angle.pop(0)  # Remove the oldest value
             self.maf_list_angle.append(deflection_angle)  # Add the new value
@@ -185,14 +185,14 @@ class LaneFollower:
             deflection_angle_avg = sum(self.maf_list_angle) / self.MAF_SIZE_ANGLE  # Use the average of the past values if current value is not available
 
         # Adjust speed according to deflection angle
-        if 0 <= abs(deflection_angle_avg) < 5:
-            duty_cycle = self.duty_cycle = 16
-        elif abs(deflection_angle_avg) < 10:
+        if 0 <= abs(deflection_angle_avg) < 10:
+            duty_cycle = self.duty_cycle = 17
+        elif 10 <= abs(deflection_angle_avg) < 15:
             duty_cycle = self.duty_cycle = 18
-        elif 10 < abs(deflection_angle_avg) < 30:
-            duty_cycle = self.duty_cycle = 19
+        elif 15 <= abs(deflection_angle_avg) < 30:
+            duty_cycle = self.duty_cycle = 18
         else:
-            duty_cycle = self.duty_cycle = 20
+            duty_cycle = self.duty_cycle = 17
         return error, max_left_line, max_right_line, duty_cycle
 
 
@@ -244,14 +244,13 @@ class LaneFollower:
             data = uart.read()  # read all data
             if data:
                 if b'R' in data:
-                    #print("Received Red traffic signal")
+                    print("Received Red traffic signal")
                     self.tlt = 1
                 elif b'G' in data:
                     self.tlt = 0
-                    #print("Received Green traffic signal")
-                elif b'N' in data:
-                    self.tlt = 0
-                    #print("No traffic signal detected")
+                    print("Received Green traffic signal")
+                else:
+                     self.tlt = 0
 
 
 
@@ -264,7 +263,7 @@ class LaneFollower:
             #car functions
             self.determine_distance()
             #self.identify_objects(img)
-            #self.reciever()
+            self.reciever()
 
 
             error, max_left_line, max_right_line, duty_cycle = self.detect_lines(img)
