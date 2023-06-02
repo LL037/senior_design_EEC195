@@ -42,7 +42,7 @@ class LaneFollower:
         self.servo_channel.pulse_width(0)
 
         # PID parameters (now PD parameters)  33 1.15
-        self.kp = 31
+        self.kp = 33
         self.kd = 1.15
         self.prev_error = 0
 
@@ -88,7 +88,12 @@ class LaneFollower:
         self.accel_pin = Pin('P3', Pin.OUT_PP)
         self.accel_pin.high()
         self.break_pin.low()
+        self.uart = UART(1, 115200)  # same parameters as the sender
 
+
+        self.red_values = []
+        self.green_values = []
+        self.blue_values = []
 
 
     def measure_distance_cm(self):
@@ -126,8 +131,11 @@ class LaneFollower:
                 else:
                     self.control_dc_motor(0)
 
-        elif self.tlt:
-            self.control_dc_motor(0)
+        elif self.tlt == 1:
+                if self.go == 1:
+                    self.control_dc_motor(22)
+                else:
+                    self.control_dc_motor(0)
         else:
             self.control_dc_motor(duty_cycle)
 
@@ -156,7 +164,7 @@ class LaneFollower:
         # If both lines are detected, calculate the center
         if max_left is not None and max_right is not None:
             lane_center = (max_left + max_right)//2
-            print("Lane Center:", lane_center)
+            #print("Lane Center:", lane_center)
             self.last_center = lane_center  # Update the last center
         else:
             lane_center = self.last_center  # Use the last center
@@ -176,7 +184,6 @@ class LaneFollower:
             left_angle = max_left_line.theta()
             right_angle = max_right_line.theta()
             deflection_angle = (left_angle - right_angle) / 2
-            print("deflection angle: ",deflection_angle)
             # Add the current deflection angle to the list and calculate the average
             self.maf_list_angle.pop(0)  # Remove the oldest value
             self.maf_list_angle.append(deflection_angle)  # Add the new value
@@ -237,20 +244,30 @@ class LaneFollower:
 
         self.motor_control(self.duty_cycle,self.tlt, self.ot)
 
+    def red_light_stop(self):
+        self.go = 0
+        self.accel_pin.low()
+        self.break_pin.low()
+
 
     def reciever(self):
-        uart = UART(1, 115200)  # same parameters as the sender
-        if uart.any():  # if there's any data available
-            data = uart.read()  # read all data
+        if self.uart.any():  # if there's any data available
+            data = self.uart.read()  # read all data
             if data:
                 if b'R' in data:
-                    print("Received Red traffic signal")
+                    print(self.tlt)
                     self.tlt = 1
+                    self.red_light_stop()
                 elif b'G' in data:
                     self.tlt = 0
-                    print("Received Green traffic signal")
+                    self.go = 1
+                    self.accel_pin.high()
+                    self.motor_control(self.duty_cycle, self.tlt, self.ot)
                 else:
-                     self.tlt = 0
+                    self.tlt = 0
+                    self.go = 1
+                    self.accel_pin.high()
+                    self.motor_control(self.duty_cycle, self.tlt, self.ot)
 
 
 
@@ -262,13 +279,11 @@ class LaneFollower:
 
             #car functions
             self.determine_distance()
-            #self.identify_objects(img)
             self.reciever()
 
 
-            error, max_left_line, max_right_line, duty_cycle = self.detect_lines(img)
-            self.motor_control(duty_cycle, self.tlt, self.ot)
 
+            error, max_left_line, max_right_line, duty_cycle = self.detect_lines(img)
 
             # Calculate PD controller output
             pd_output = self.calculate_pid_output(error)
