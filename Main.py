@@ -2,7 +2,7 @@ import sensor
 import time
 import pyb
 import math
-from pyb import Timer, Pin
+from pyb import Timer, Pin, UART
 import image, os, tf, uos, gc
 
 
@@ -43,7 +43,7 @@ class LaneFollower:
 
         # PID parameters (now PD parameters)
         self.kp = 35
-        self.kd = 1.2
+        self.kd = 1.3
         self.prev_error = 0
 
 
@@ -68,7 +68,7 @@ class LaneFollower:
         self.DAMPING_FACTOR = 0.5
 
         # Define the size of the moving average filter
-        self.MAF_SIZE = 2
+        self.MAF_SIZE = 8
 
         # Initialize the moving average filter list with the desired_lane_center
         self.maf_list = [self.desired_lane_center for _ in range(self.MAF_SIZE)]
@@ -78,13 +78,19 @@ class LaneFollower:
 
         # Initialize the moving average filter list for deflection angle
         self.maf_list_angle = [0 for _ in range(self.MAF_SIZE_ANGLE)]
-        
+
         #dc motor control flag
         self.tlt = 0
         self.ot = 0
-        self.go = 1
-        
-        
+        self.go = 0
+
+        self.break_pin = Pin('P5', Pin.OUT_PP)
+        self.accel_pin = Pin('P3', Pin.OUT_PP)
+        self.accel_pin.high()
+        self.break_pin.low()
+
+
+
     def measure_distance_cm(self):
         trigger_pin = Pin('P7', Pin.OUT_PP)
         echo_pin = Pin('P8', Pin.IN)
@@ -112,22 +118,14 @@ class LaneFollower:
         self.servo_channel.pulse_width(servo_command)
 
     def motor_control(self, duty_cycle, tlt, ot):
+
         if self.ot == 1:
-            # Stop the car
-            if self.go = 1:
-                self.control_dc_motor(25)
-            else:
-                self.control_dc_motor(0)
-             
-            #print("stop")
-            #pyb.delay(1000)  # Adjust the delay as needed (1 second = 1000 milliseconds)
-            #self.control_servo_motor(self.SERVO_MIN) 
-            #self.control_dc_motor(25)
-            #pyb.delay(800)
-            #pyb.delay(1800)  # Adjust the delay as needed (3 seconds = 3000 milliseconds)        
-            # Resume lane following
-            #self.control_dc_motor(duty_cycle)
-            
+                # Stop the car
+                if self.go == 1:
+                    self.control_dc_motor(22)
+                else:
+                    self.control_dc_motor(0)
+
         elif self.tlt:
             self.control_dc_motor(0)
         else:
@@ -135,7 +133,6 @@ class LaneFollower:
             print(duty_cycle)
 
 
-    
     def detect_lines(self, img):
         img_gray = img.copy()
         img_gray.to_grayscale()
@@ -188,10 +185,12 @@ class LaneFollower:
             deflection_angle_avg = sum(self.maf_list_angle) / self.MAF_SIZE_ANGLE  # Use the average of the past values if current value is not available
 
         # Adjust speed according to deflection angle
-        if abs(deflection_angle_avg) < 10:
+        if 0 <= abs(deflection_angle_avg) < 5:
             duty_cycle = self.duty_cycle = 16
-        elif 10 < abs(deflection_angle_avg) < 30:
+        elif abs(deflection_angle_avg) < 10:
             duty_cycle = self.duty_cycle = 18
+        elif 10 < abs(deflection_angle_avg) < 30:
+            duty_cycle = self.duty_cycle = 19
         else:
             duty_cycle = self.duty_cycle = 20
         return error, max_left_line, max_right_line, duty_cycle
@@ -210,69 +209,49 @@ class LaneFollower:
 
     def determine_distance(self):
         distance = self.measure_distance_cm()
-        if distance < 300:  # If the cone is closer than 30 cm, stop the car
-             self.ot = 1
-
+        if distance < 200:  # If the cone is closer than 30 cm, stop the car
+            self.ot = 1
+            self.bypass_object()
         else:
             self.ot = 0
-            
+
     def bypass_object(self):
         # Stop the car
-        self.go = 0
 
-        ## Wait for the car to turn
-        pyb.delay(1000)  # Adjust the delay as needed (1 second = 1000 milliseconds)
-        self.control_servo_motor(self.SERVO_MIN)  # Adjust the value if needed
-        pyb.delay(800)
         self.go = 1
-        pyb.delay(800)
-
-        ## Move the servo motor back to the neutral position
-        
+        self.accel_pin.low()
+        self.break_pin.high()
         self.control_servo_motor(self.SERVO_NEUTRAL)
-        self.control_servo_motor(self.SERVO_MAX)
 
-       
-        pyb.delay(800)
+        pyb.delay(2000)
+
+        self.control_servo_motor(self.SERVO_MIN)
+
+        self.accel_pin.high()
+        self.break_pin.low()
+
+        self.motor_control(self.duty_cycle,self.tlt, self.ot)
+
+        pyb.delay(1000)
         self.go = 1
 
-          # Adjust the delay as needed (3 seconds = 3000 milliseconds)
-        #pyb.delay(3000)  # Adjust the delay as needed (3 seconds = 3000 milliseconds)
+        self.motor_control(self.duty_cycle,self.tlt, self.ot)
 
-        # Resume lane following
-        #self.control_dc_motor(self.duty_cycle)
 
-    def traffic_detect(self, img):
-        img_traffic = img.copy()
-        red_threshold = 225
-        green_threshold = 190
-        
-        self.circles = img_traffic.find_circles(threshold=1000, x_margin=10, y_margin=10, r_margin=10, r_min=10, r_max=50, r_step=2)
-    
-        if self.circles:
-            for circle in self.circles:
-                roi_x = circle.x()
-                roi_y = circle.y()
-                roi_width = circle.r()
-                roi_height = circle.r()
-                roi = (roi_x, roi_y, roi_width, roi_height)  # Define the ROI
-                color = img.get_pixel(roi_x, roi_y)
-                #print(color)
-                if color[0] > red_threshold and color[1] < green_threshold and color[2] < green_threshold:
+    def reciever(self):
+        uart = UART(1, 115200)  # same parameters as the sender
+        if uart.any():  # if there's any data available
+            data = uart.read()  # read all data
+            if data:
+                if b'R' in data:
+                    #print("Received Red traffic signal")
                     self.tlt = 1
-                    print("Red traffic")
-                    # Process the filtered red blobs within the ROI
-    
-                elif color[0] < red_threshold and color[1] > green_threshold and color[2] < green_threshold:
+                elif b'G' in data:
                     self.tlt = 0
-                    print("Green traffic")
-                    # Process the filtered green blobs within the ROI
-    
-        else:
-            print("No traffic")
-            self.tlt = 0
-
-
+                    #print("Received Green traffic signal")
+                elif b'N' in data:
+                    self.tlt = 0
+                    #print("No traffic signal detected")
 
 
 
@@ -280,17 +259,17 @@ class LaneFollower:
         while True:
             self.clock.tick()
             img = sensor.snapshot()  # Get a color image
-            
-            
+
+
             #car functions
             self.determine_distance()
             #self.identify_objects(img)
-            self.traffic_detect(img)
+            #self.reciever()
 
 
             error, max_left_line, max_right_line, duty_cycle = self.detect_lines(img)
             self.motor_control(duty_cycle, self.tlt, self.ot)
-         
+
 
             # Calculate PD controller output
             pd_output = self.calculate_pid_output(error)
