@@ -118,11 +118,13 @@ class LaneFollower:
             pyb.delay(800)
             pyb.delay(800)  # Adjust the delay as needed (3 seconds = 3000 milliseconds)        
             # Resume lane following
-            self.control_dc_motor(self.duty_cycle)
+            self.control_dc_motor(duty_cycle)
+            
         elif self.tlt:
             self.control_dc_motor(0)
         else:
-            self.control_dc_motor(self.duty_cycle)
+            self.control_dc_motor(duty_cycle)
+            print(duty_cycle)
     
     def detect_lines(self, img):
         img_gray = img.copy()
@@ -272,7 +274,8 @@ class LaneFollower:
 
 
             error, max_left_line, max_right_line, duty_cycle = self.detect_lines(img)
-            self.motor_control(self.duty_cycle, self.tlt, self.ot)
+            self.motor_control(duty_cycle, self.tlt, self.ot)
+         
 
             # Calculate PD controller output
             pd_output = self.calculate_pid_output(error)
